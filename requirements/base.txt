@@ -1,0 +1,6 @@
+Django==5.0.1
+djangorestframework==3.14.0
+psycopg2-binary==2.9.9
+django-environ==0.11.2
+django-extensions==3.2.3
+structlog==24.1.0
