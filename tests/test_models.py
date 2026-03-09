@@ -28,7 +28,7 @@ class TestWalletModel:
     
     def test_create_system_wallet(self):
         """Test creating a system wallet."""
-        wallet = Wallet.objects.create(
+        wallet, created = Wallet.objects.get_or_create(
             is_system=True,
             currency='NGN',
             name='SYSTEM'

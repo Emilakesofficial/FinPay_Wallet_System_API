@@ -66,6 +66,11 @@ class Wallet(BaseModel):
                       models.Q(is_system=False, user__isnull=False),
                 name='system_wallet_has_no_user'
             ),
+            models.UniqueConstraint(
+                fields=['is_system', 'currency'],
+                condition=models.Q(is_system=True),
+                name='unique_system_wallet_per_currency'
+            ),
         ]
         
     def __str__(self):
@@ -81,8 +86,7 @@ class Wallet(BaseModel):
         Returns:
             Decimal: Current balance
         """
-        latest_entry = self.ledger_entries.order_by('-created_at').first()
-        return latest_entry.balance_after if latest_entry else Decimal('0.00')
+        return self.compute_balance()
     
     def compute_balance(self) -> Decimal:
         """
@@ -242,12 +246,18 @@ class LedgerEntry(BaseModel):
         return f"{self.entry_type}: {self.amount} on {self.wallet}"
     
     def save(self, *args, **kwargs):
-        """
-        Override save to prevent updates (entries are immutable).
-        """
-        if self.pk is not None:
-            raise ValueError("Ledger entries cannot be modified once created")
-        super().save(*args, **kwargs)
+        """Prevent updates (entries are immutable)."""
+        if self._state.adding:
+            # New record - allow save
+            super().save(*args, **kwargs)
+        else:
+            # Update - block it (unless explicitly allowed for reconciliation)
+            if kwargs.pop('force_update_balance', False):
+                # Allow balance_after update for reconciliation auto-fix
+                super().save(update_fields=['balance_after'], *args, **kwargs)
+            else:
+                raise ValueError("Ledger entries cannot be modified once created")
+    
     
     def delete(self, *args, **kwargs):
         """

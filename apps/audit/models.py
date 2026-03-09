@@ -7,6 +7,28 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from common.models import BaseModel
 
+class AuditAction(models.TextChoices):
+    """Audit action types"""
+    # Auth actions
+    USER_REGISTERED = 'USER_REGISTERED', 'User Registered'
+    USER_LOGIN = 'USER_LOGIN', 'User Login',
+    USER_LOGOUT = 'USER_LOGOUT', 'User Logout',
+    PROFILE_UPDATED = 'PROFILE_UPDATED', 'Profile Updated',
+    PASSWORD_CHANGED = 'PASSWORD_CHANGED', 'Password Changed'
+    
+    # Wallet actions
+    WALLET_CREATED = 'WALLET_CREATED', 'Wallet Created'
+    
+    #Transaction actions
+    DEPOSIT = 'DEPOSIT', 'Deposit'
+    WITHDRAWAL = 'WITHDRAWAL', 'Withdrawal'
+    TRANSFER = 'TRANSFER', 'Transfer'
+    
+    #Admin actions
+    RECONCILIATION_RUN = 'RECONCILIATION_RUN', 'Reconciliation Run'
+    BALANCE_DRIFT_FIXED = 'BALANCE_DRIFT_FIXED', 'Balance Drift Fixed'
+
+
 
 class AuditLog(BaseModel):
     """
@@ -28,31 +50,22 @@ class AuditLog(BaseModel):
         db_index=True,
         help_text="Action performed (e.g., DEPOSIT, WITHDRAW, TRANSFER)"
     )
-    
-    # Generic foreign key to any model
-    content_type = models.ForeignKey(
-        ContentType,
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True
+    target_type = models.CharField(
+        max_length=50,
+        db_index=True,
+        help_text="Type of entity affected (e.g., Wallet, Transaction)"
     )
-    object_id = models.UUIDField(null=True, blank=True)
-    target = GenericForeignKey('content_type', 'object_id')
-    
-    # Capture the state before and after
-    old_state = models.JSONField(
+    target_id = models.UUIDField(
         null=True,
         blank=True,
-        help_text="State before the action"
+        db_index=True,
+        help_text="ID of the affected entity"
     )
-    
-    new_state = models.JSONField(
-        null=True,
+    changes = models.JSONField(
+        default=dict,
         blank=True,
-        help_text="State after the action"
+        help_text="Details of the change"
     )
-    
-    # Request metadata
     ip_address = models.GenericIPAddressField(
         null=True,
         blank=True,
@@ -61,6 +74,7 @@ class AuditLog(BaseModel):
     
     user_agent = models.TextField(
         blank=True,
+        default='',
         help_text="User agent string"
     )
     
@@ -73,29 +87,28 @@ class AuditLog(BaseModel):
     
     class Meta:
         db_table = 'audit_logs'
+        ordering = ['-created_at']
         verbose_name = 'Audit Log'
         verbose_name_plural = 'Audit Logs'
         indexes = [
             models.Index(fields=['-created_at']),
             models.Index(fields=['actor', '-created_at']),
             models.Index(fields=['action', '-created_at']),
-            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['target_type', 'target_id']),
         ]
-        # Prevent any modifications
-        permissions = [
-            ("can_view_sensitive_view_auditlog", "Can view audit logs"),
-        ]
-    
+        
     def __str__(self):
         actor_name = self.actor.email if self.actor else "System"
         return f"{actor_name} - {self.action} at {self.created_at}"
     
     def save(self, *args, **kwargs):
-        """Override save to prevent updates."""
-        if self.pk is not None:
+        """Prevent updates to audit logs."""
+        if self._state.adding:
+            super().save(*args, **kwargs)
+        else:
+            # This is an update - block it
             raise ValueError("Audit logs cannot be modified once created")
-        super().save(*args, **kwargs)
     
     def delete(self, *args, **kwargs):
-        """Override delete to prevent deletion."""
+        """Prevent deletion of audit logs."""
         raise ValueError("Audit logs cannot be deleted")

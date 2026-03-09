@@ -21,6 +21,10 @@ class BaseModel(models.Model):
     )
     created_at = models.DateTimeField(
         auto_now=True,
+        help_text="Timestamp when the record was last created"
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
         help_text="Timestamp when the record was last updated"
     )
     class Meta:

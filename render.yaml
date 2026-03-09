@@ -1,0 +1,19 @@
+# Render service manifest: https://render.com/docs/render-manifest
+services:
+  - type: web
+    name: wallet-system-web
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    buildCommand: docker build -t wallet-system .
+    startCommand: /entrypoint.sh
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+
+  - type: background
+    name: wallet-system-worker
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    startCommand: celery -A config worker --loglevel=INFO
