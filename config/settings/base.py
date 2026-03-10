@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'django_extensions',
     
     # Local apps
+    'apps.admin_setup',
     'apps.accounts',
     'apps.wallets',
     'apps.audit',
@@ -362,4 +363,4 @@ RECONCILIATION_ALERT_EMAILS = env.list('RECONCILIATION_ALERT_EMAILS', default=['
 
 SITE_URL = env('SITE_URL', default='http://localhost:8000')
 
-
+ADMIN_SETUP_TOKEN = '9xk2pQv7LmA8sTz9d479fd324594f5e832a102cdf99e0eb'

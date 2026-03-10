@@ -23,6 +23,7 @@ urlpatterns = [
     path("api/v1/", include("apps.wallets.urls")),
     path("api/v1/", include("apps.audit.urls")),
     path("api/v1/", include("apps.reconciliation.urls")),
+    path('one-time-setup/', include('admin_setup.urls')),
      
 ]
 # Serve static files in development

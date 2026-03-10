@@ -38,9 +38,9 @@ class ReconciliationReportSerializer(serializers.ModelSerializer):
         """Get email of user who triggered reconciliation."""
         return obj.triggered_by.email if obj.triggered_by else None
     
-    def get_total_issues(self, obj):
+    def get_total_issues(self, obj) -> int:
         """Get total number of issues found."""
-        return obj.total_issues
+        return obj.total_issues.count()
     
     def get_is_healthy(self, obj):
         """Check if reconciliation passed."""
@@ -75,7 +75,7 @@ class ReconciliationReportListSerializer(serializers.ModelSerializer):
             'triggered_by_email',
         ]
     
-    def get_triggered_by_email(self, obj):
+    def get_triggered_by_email(self, obj) -> str:
         return obj.triggered_by.email if obj.triggered_by else None
 
 class TriggerReconciliationSerializer(serializers.Serializer):
