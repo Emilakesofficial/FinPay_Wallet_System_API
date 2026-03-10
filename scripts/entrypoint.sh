@@ -17,8 +17,10 @@ python manage.py migrate --noinput
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
+echo "Starting Celery worker..."
+celery -A config worker -l info &
+
 echo "Starting Gunicorn..."
-# Render provides a $PORT environment variable; default to 8000 locally
 PORT=${PORT:-8000}
 exec gunicorn config.wsgi:application \
   --bind 0.0.0.0:${PORT} \
