@@ -40,7 +40,7 @@ class ExceptionLoggingMiddleware(MiddlewareMixin):
             exception_type=exception.__class__.__name__,
             exception_message=str(exception),
             path=request.path,
-            method=request.methods,
+            method=request.method,
             user=str(request.user) if hasattr(request, 'user') else 'anonymous',
         )
         # Return None to let Django's exception handling continue
