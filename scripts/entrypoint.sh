@@ -3,13 +3,13 @@ set -e
 
 echo "Starting entrypoint"
 
-# Wait for DB (basic check)
-DB_HOST=${DATABASE_HOST:-db}
-DB_PORT=${DATABASE_PORT:-5432}
-echo "Waiting for database ${DB_HOST}:${DB_PORT}..."
-until nc -z ${DB_HOST} ${DB_PORT}; do
-  sleep 1
-done
+# # Wait for DB (basic check)
+# DB_HOST=${DATABASE_HOST:-db}
+# DB_PORT=${DATABASE_PORT:-5432}
+# # echo "Waiting for database ${DB_HOST}:${DB_PORT}..."
+# # until nc -z ${DB_HOST} ${DB_PORT}; do
+# #   sleep 1
+# # done
 
 echo "Running migrations..."
 python manage.py migrate --noinput
