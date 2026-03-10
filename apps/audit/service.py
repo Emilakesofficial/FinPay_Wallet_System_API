@@ -81,6 +81,14 @@ class AuditService:
     @staticmethod
     def log_withdrawal(transaction, actor):
         """Log a withdrawal action."""
+        metadata = transaction.metadata
+        if isinstance(metadata, str):
+            import json
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+            
         return AuditService.log(
             action=AuditAction.WITHDRAWAL,
             target_type='Transaction',
@@ -89,7 +97,7 @@ class AuditService:
             changes={
                 'amount': str(transaction.amount),
                 'currency': transaction.currency,
-                'wallet_id': str(transaction.metadata.get('wallet_id', '')),
+                'wallet_id': str(metadata.get('wallet_id', '')),
                 'reference': transaction.reference,
             },
         )
