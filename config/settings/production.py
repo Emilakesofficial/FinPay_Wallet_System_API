@@ -9,7 +9,7 @@ from .base import *
 
 # Debug and hosts
 DEBUG = env.bool('DEBUG', default=False)
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost'])
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['finpay-f9zx.onrender.com'])
 
 # Security settings (override via env if needed)
 SECURE_SSL_REDIRECT = env.bool('SECURE_SSL_REDIRECT', default=True)
