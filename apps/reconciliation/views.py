@@ -182,7 +182,7 @@ class ReconciliationViewSet(viewsets.ReadOnlyModelViewSet):
         
         data = {
             'is_running': is_running,
-            'latest_report': ReconciliationReportListSerializer(latest).data if latest else None,
+            'latest_report': latest,
             'total_reports': total_reports,
             'last_24h_reports': last_24h,
             'health_summary': health_dict

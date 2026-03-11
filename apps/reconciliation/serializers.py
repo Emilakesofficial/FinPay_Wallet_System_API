@@ -36,7 +36,10 @@ class ReconciliationReportSerializer(serializers.ModelSerializer):
         
     def get_triggered_by_email(self, obj):
         """Get email of user who triggered reconciliation."""
-        return obj.triggered_by.email if obj.triggered_by else None
+        # obj is a ReconciliationReport model instance
+        if obj and hasattr(obj, 'triggered_by') and obj.triggered_by:
+            return obj.triggered_by.email
+        return None
     
     def get_total_issues(self, obj) -> int:
         """Get total number of issues found."""
@@ -87,16 +90,16 @@ class TriggerReconciliationSerializer(serializers.Serializer):
     )
     
 class ReconciliationStatusSerializer(serializers.Serializer):
-    """Serializer for current reconciliation status."""
-    
+    """Serializer for reconciliation status endpoint."""
     is_running = serializers.BooleanField()
-    latest_report = ReconciliationReportListSerializer(
-        allow_null=True,
-        read_only=True
-    )
+    latest_report = ReconciliationReportListSerializer(allow_null=True, required=False)
     total_reports = serializers.IntegerField()
     last_24h_reports = serializers.IntegerField()
-    health_summary = serializers.DictField()
+    health_summary = serializers.DictField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=dict
+    )
 
 class ReconciliationSummarySerializer(serializers.Serializer):
     """Serializer for reconciliation summary statistics."""
