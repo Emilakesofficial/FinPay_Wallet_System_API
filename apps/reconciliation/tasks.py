@@ -287,6 +287,9 @@ def check_transaction_state(self, report_id):
                 'expected': 2,
                 'severity': 'HIGH'
             })
+            logger.info(type(failed_with_entries))
+            logger.info(type(stuck_pending))
+            logger.info(type(completed_wrong_entries))
         
         result = {
             'check': 'transaction_state',
@@ -295,9 +298,9 @@ def check_transaction_state(self, report_id):
             'discrepancies': discrepancies,
             'severity': 'MEDIUM' if discrepancies else 'LOW',
             'metadata': {
-                'failed_checked': failed_with_entries.count(),
-                'pending_checked': stuck_pending.count(),
-                'completed_checked': completed_wrong_entries.count()
+                'failed_checked': len(failed_with_entries),
+                'pending_checked': len(stuck_pending),
+                'completed_checked': len(completed_wrong_entries),
             }
         }
         
