@@ -19,6 +19,10 @@ from .serializers import (
     ReconciliationSummarySerializer,
 )
 from .tasks import run_reconciliation
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from django.db import connection
+from config.celery import app as celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +262,7 @@ class ReconciliationViewSet(viewsets.ReadOnlyModelViewSet):
             'reports_last_30d': last_30d,
             'status_breakdown': status_dict,
             'average_duration': round(avg_duration, 2),
-            'latest_report': ReconciliationReportListSerializer(latest).data if latest else None,
+            'latest_report': latest,
             'recent_failures': failure_list
         }
         
@@ -289,3 +293,100 @@ class ReconciliationViewSet(viewsets.ReadOnlyModelViewSet):
         
         serializer = self.get_serializer(report)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'])
+    def test_celery(self, request):
+        """Test if Celery is working properly."""
+        from config.celery import app
+        
+        results = {
+            'broker_url': app.conf.broker_url[:50] + '...' if len(app.conf.broker_url) > 50 else app.conf.broker_url,
+            'result_backend': app.conf.result_backend[:50] + '...' if app.conf.result_backend and len(app.conf.result_backend) > 50 else app.conf.result_backend,
+        }
+        
+        # Test broker connection
+        try:
+            conn = app.connection()
+            conn.ensure_connection(max_retries=3)
+            conn.close()
+            results['broker_connected'] = True
+            results['broker_error'] = None
+        except Exception as e:
+            results['broker_connected'] = False
+            results['broker_error'] = str(e)
+        
+        # Test sending a task
+        try:
+            from .tasks import check_global_balance
+            
+            # Create a dummy report for testing
+            report = ReconciliationReport.objects.create(
+                run_type='TEST',
+                status=ReconciliationStatus.PENDING,
+                triggered_by=request.user if request.user.is_authenticated else None,
+                started_at=timezone.now()
+            )
+            
+            task_result = check_global_balance.delay(str(report.id))
+            results['task_sent'] = True
+            results['task_id'] = str(task_result.id)
+            results['test_report_id'] = str(report.id)
+            results['task_error'] = None
+        except Exception as e:
+            results['task_sent'] = False
+            results['task_id'] = None
+            results['task_error'] = str(e)
+        
+        return Response(results)
+    
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def health_check(request):
+    """
+    Health check endpoint for monitoring.
+    Checks:
+    - Database connection
+    - Redis/Celery broker connection
+    - Celery worker status
+    """
+    health = {
+        'status': 'healthy',
+        'checks': {}
+    }
+    
+    # Check database
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        health['checks']['database'] = 'ok'
+    except Exception as e:
+        health['checks']['database'] = f'error: {str(e)}'
+        health['status'] = 'unhealthy'
+    
+    # Check Redis/Broker
+    try:
+        conn = celery_app.connection()
+        conn.ensure_connection(max_retries=3)
+        conn.release()
+        health['checks']['redis'] = 'ok'
+    except Exception as e:
+        health['checks']['redis'] = f'error: {str(e)}'
+        health['status'] = 'unhealthy'
+    
+    # Check Celery workers
+    try:
+        inspect = celery_app.control.inspect()
+        stats = inspect.stats()
+        
+        if stats:
+            active_workers = len(stats)
+            health['checks']['celery_workers'] = f'ok ({active_workers} active)'
+        else:
+            health['checks']['celery_workers'] = 'warning: no workers detected'
+            health['status'] = 'degraded'
+    except Exception as e:
+        health['checks']['celery_workers'] = f'error: {str(e)}'
+        health['status'] = 'unhealthy'
+    
+    status_code = 200 if health['status'] == 'healthy' else 503
+    return Response(health, status=status_code)

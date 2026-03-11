@@ -78,9 +78,17 @@ class ReconciliationReportListSerializer(serializers.ModelSerializer):
             'triggered_by_email',
         ]
     
-    def get_triggered_by_email(self, obj) -> str:
-        return obj.triggered_by.email if obj.triggered_by else None
-
+    def get_triggered_by_email(self, obj):
+        """Get email of user who triggered the report."""
+        # Ensure obj is a model instance, not a dict
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get('triggered_by_email')
+        if hasattr(obj, 'triggered_by') and obj.triggered_by:
+            return obj.triggered_by.email
+        return None
+    
 class TriggerReconciliationSerializer(serializers.Serializer):
     """Serializer for triggering reconciliation."""
     
@@ -100,6 +108,21 @@ class ReconciliationStatusSerializer(serializers.Serializer):
         required=False,
         default=dict
     )
+    
+    def get_latest_report(self, obj):
+        """Handle latest report - can be model or dict."""
+        latest = obj.get('latest_report') if isinstance(obj, dict) else getattr(obj, 'latest_report', None)
+        
+        if latest is None:
+            return None
+        
+        # If already serialized (dict), return as-is
+        if isinstance(latest, dict):
+            return latest
+        
+        # If model instance, serialize it
+        return ReconciliationReportListSerializer(latest).data
+
 
 class ReconciliationSummarySerializer(serializers.Serializer):
     """Serializer for reconciliation summary statistics."""
