@@ -17,6 +17,7 @@ class ReconciliationStatus(models.TextChoices):
     WARNING = 'WARNING', 'Warning'
     FAILED = 'FAILED', 'Failed'
     CRITICAL = 'CRITICAL', 'Critical'
+    PENDING = 'PENDING', 'Pending'
 
 
 class ReconciliationReport(BaseModel):

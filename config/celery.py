@@ -19,6 +19,7 @@ app.conf.beat_schedule = {
     'daily-reconciliation': {
         'task': 'apps.reconciliation.tasks.run_reconciliation',
         'schedule': crontab(hour=2, minute=0), # 2AM daily
+        'kwargs': {'run_type': 'SCHEDULED'},
         'options': {
             'expires': 3600, # Task expires after 1 hour
         }

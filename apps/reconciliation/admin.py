@@ -173,3 +173,12 @@ class ReconciliationReportAdmin(admin.ModelAdmin):
                 'statistics_display'
             ]
         return self.readonly_fields
+    
+# @admin.register(ReconciliationReport)
+# class ReconciliationReportAdmin(admin.ModelAdmin):
+#     list_display = ('id','status', 'run_type', 'started_at', 'completed_at', 'triggered_by', 'run_button')
+    
+#     def run_button(self, obj):
+#         return format_html(
+#             '<a class="button" href="/admin/reconciliation/run-reconciliation/">Run Now</a>'
+#         )

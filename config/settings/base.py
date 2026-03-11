@@ -317,6 +317,8 @@ SYSTEM_WALLET_NAME = 'SYSTEM'
 CELERY_BROKER_URL = env('REDIS_URL')
 CELERY_RESULT_BACKEND = env('REDIS_URL')
 
+REDIS_URL = env('REDIS_URL')
+
 # Serialization
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -336,9 +338,11 @@ CELERY_WORKER_CONCURRENCY = 5  # 5 parallel workers
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # One task at a time
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000  # Restart worker after 1000 tasks
 
+CELERY_TASK_ALWAYS_EAGER = False
+
 #Task routing
 CELERY_TASK_ROUTES = {
-    'apps.reconciliation.tasks.*': {'queue': 'reconciliation'},
+    'apps.reconciliation.tasks.*': {'queue': 'celery'},
 }
 
 # Result backend settings
@@ -359,7 +363,7 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='noreply@walletsystem.com
 
 # Reconciliation settings
 RECONCILIATION_BATCH_SIZE = env.int('RECONCILIATION_BATCH_SIZE', default=5000)
-RECONCILIATION_ALERT_EMAILS = env.list('RECONCILIATION_ALERT_EMAILS', default=['admin@walletsystem.com'])
+RECONCILIATION_ALERT_EMAILS = env.list('RECONCILIATION_ALERT_EMAILS')
 
 SITE_URL = env('SITE_URL', default='http://localhost:8000')
 
