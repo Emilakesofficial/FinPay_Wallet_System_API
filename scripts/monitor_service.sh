@@ -1,4 +1,4 @@
-#!/bin/sh
+ #!/bin/sh
 # Monitor and restart services if they're not responding
 
 check_celery() {
