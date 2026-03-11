@@ -494,23 +494,13 @@ Checks Summary:
         logger.error(f"[Alert] Failed to send email: {exc}")
 
 @shared_task
-def run_reconciliation(run_type='SCHEDULED', triggered_by_id=None):
+def run_reconciliation(report_id):
     """Master task that orchestrates the entire reconciliation process.
     Run 5 checks in parallel using Celery chord."""
     
-    logger.info(f"[Master] Starting reconciliation run (type: {run_type})")
+    logger.info(f"[Master] Starting reconciliation for report {report_id}")
     
     try:
-        # Create report
-        report = ReconciliationReport.objects.create(
-            run_type=run_type,
-            status=ReconciliationStatus.RUNNING,
-            triggered_by_id=triggered_by_id
-        )
-        
-        report_id = str(report.id)
-        logger.info(f"[Laster] Created report {report_id}")
-        
         # Define parallel workflow using chord
         # All checks run in parallel, then aggregate_results is called
         workflow = chord([

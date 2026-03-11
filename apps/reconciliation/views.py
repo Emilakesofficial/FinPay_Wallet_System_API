@@ -104,53 +104,48 @@ class ReconciliationViewSet(viewsets.ReadOnlyModelViewSet):
         run_type = serializer.validated_data.get('run_type', ReconciliationType.MANUAL)
         
         # Check if already running
-        running = ReconciliationReport.objects.filter(
+        if ReconciliationReport.objects.filter(
             status=ReconciliationStatus.RUNNING
-        ).exists()
-        
-        if running:
+        ).exists():
             return Response(
                 {'error': 'A reconciliation is already running'},
                 status=status.HTTP_409_CONFLICT
             )
         
-        # Trigger reconciliation task
+        report = ReconciliationReport.objects.create(
+            run_type=run_type,
+            status=ReconciliationStatus.RUNNING,
+            triggered_by=request.user
+        )
+        
         try:
-            report_id = run_reconciliation.delay(
+        # ✅ Create report immediately (no race condition)
+            report = ReconciliationReport.objects.create(
                 run_type=run_type,
-                triggered_by_id=str(request.user.id)
+                status=ReconciliationStatus.RUNNING,
+                triggered_by=request.user
             )
             
-            logger.info(f"Reconciliation triggered by {request.user.email}: {report_id}")
+            # ✅ Queue Celery task with report ID
+            run_reconciliation.delay(str(report.id))
+
+            logger.info(
+                f"Reconciliation {report.id} triggered by {request.user.email}"
+            )
             
-            # Wait a moment for report to be created
-            import time
-            time.sleep(0.5)
-            
-            # Return the created report
-            try:
-                report = ReconciliationReport.objects.get(id=report_id.id)
-                response_serializer = ReconciliationReportListSerializer(report)
-                return Response(
-                    response_serializer.data,
-                    status=status.HTTP_202_ACCEPTED
-                )
-            except ReconciliationReport.DoesNotExist:
-                return Response(
-                    {
-                        'message': 'Reconciliation queued',
-                        'task_id': str(report_id)
-                    },
-                    status=status.HTTP_202_ACCEPTED
-                )
-        
+            # Return report immediately
+            response = ReconciliationReportSerializer(report)
+            return Response(
+                response.data,
+                status=status.HTTP_202_ACCEPTED
+            )
         except Exception as e:
             logger.error(f"Failed to trigger reconciliation: {e}")
             return Response(
                 {'error': 'Failed to trigger reconciliation'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
+            
     @extend_schema(responses={200: ReconciliationStatusSerializer})
     @action(detail=False, methods=['get'])
     def status(self, request):
