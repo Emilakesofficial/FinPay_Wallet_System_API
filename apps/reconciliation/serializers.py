@@ -40,7 +40,7 @@ class ReconciliationReportSerializer(serializers.ModelSerializer):
     
     def get_total_issues(self, obj) -> int:
         """Get total number of issues found."""
-        return obj.total_issues.count()
+        return obj.total_issues.count
     
     def get_is_healthy(self, obj):
         """Check if reconciliation passed."""
