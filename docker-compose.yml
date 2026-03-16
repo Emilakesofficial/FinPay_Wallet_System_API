@@ -12,10 +12,6 @@ services:
 
   redis:
     image: redis:7
-    # Do not publish Redis port to host by default to avoid port conflicts
-    # If you need external access, uncomment and adjust the mapping below
-    # ports:
-    #   - "6379:6379"
 
   web:
     build: .

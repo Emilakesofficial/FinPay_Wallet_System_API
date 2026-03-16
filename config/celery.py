@@ -24,7 +24,7 @@ app.conf.update(
     
     # Important: Optimize for shared container
     worker_prefetch_multiplier=1,  # Fetch one task at a time
-    worker_max_tasks_per_child=100,  # Restart worker after 100 tasks (prevent memory leaks)
+    worker_max_tasks_per_child=50,  # Restart worker after 100 tasks (prevent memory leaks)
     task_acks_late=True,  # Acknowledge tasks after completion
     task_reject_on_worker_lost=True,  # Re-queue if worker crashes
     

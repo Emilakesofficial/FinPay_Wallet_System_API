@@ -23,6 +23,7 @@ RUN chmod +x /entrypoint.sh
 
 RUN groupadd -r app && useradd -r -g app app || true
 RUN chown -R app:app /app /entrypoint.sh || true
+
 USER app
 
 ENV PATH="/home/app/.local/bin:${PATH}"
