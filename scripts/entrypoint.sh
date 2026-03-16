@@ -15,12 +15,12 @@ celery -A config worker -l info concurrency=2 &
 CELERY_PID=$!
 
 # Trap to ensure Celery stops when Gunicorn stops
-cleanup() {
-  echo "Shutting down celery worker..."
-  kill -TERM "$CELERY_PID" 2>/dev/null || true
-  Wait "$CELERY_PID" 2>/dev/null || true
-}
-trap cleanup EXIST TERM INT
+# cleanup() {
+#   echo "Shutting down celery worker..."
+#   kill -TERM "$CELERY_PID" 2>/dev/null || true
+#   Wait "$CELERY_PID" 2>/dev/null || true
+# }
+# trap cleanup EXIST TERM INT
 
 echo "Starting Gunicorn..."
 PORT=${PORT:-8000}
