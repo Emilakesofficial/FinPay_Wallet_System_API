@@ -23,6 +23,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from django.db import connection
 from config.celery import app as celery_app
+from django.db import transaction
+from common.throttling import ReconciliationRateThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ class ReconciliationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
     queryset = ReconciliationReport.objects.all().select_related('triggered_by')
+    throttle_classes = [ReconciliationRateThrottle]
     
     def get_serializer_class(self):
         """Return appropriate serializer."""
@@ -116,40 +119,122 @@ class ReconciliationViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_409_CONFLICT
             )
         
-        report = ReconciliationReport.objects.create(
-            run_type=run_type,
-            status=ReconciliationStatus.RUNNING,
-            triggered_by=request.user
-        )
-        
         try:
-        # ✅ Create report immediately (no race condition)
-            report = ReconciliationReport.objects.create(
+            with transaction.atomic():
+                # Lock check - prevent race condition
+                if ReconciliationReport.objects.select_for_update().filter(
+                    status__in=[ReconciliationStatus.RUNNING, ReconciliationStatus.PENDING]
+                ).exists():
+                    return Response(
+                        {'error': 'A reconciliation is already running'},
+                        status=status.HTTP_409_CONFLICT
+                    )
+                    
+                # Create report immediately (no race condition)
+                report = ReconciliationReport.objects.create(
+                    run_type=run_type,
+                    status=ReconciliationStatus.PENDING,
+                    triggered_by=request.user,
+                    started_at=timezone.now()
+                )
+                
+            # Queue Celery task with report ID
+            task_result = run_reconciliation.delay(
                 run_type=run_type,
-                status=ReconciliationStatus.RUNNING,
-                triggered_by=request.user
+                report_id=str(report.id)
             )
-            
-            # ✅ Queue Celery task with report ID
-            run_reconciliation.delay(str(report.id))
 
             logger.info(
                 f"Reconciliation {report.id} triggered by {request.user.email}"
+                f"Task ID: {task_result.id}"
             )
             
             # Return report immediately
-            response = ReconciliationReportSerializer(report)
+            serializer = ReconciliationReportSerializer(report)
             return Response(
-                response.data,
+                {
+                    **serializer.data,
+                    'task_id': str(task_result.id)
+                },
                 status=status.HTTP_202_ACCEPTED
             )
         except Exception as e:
-            logger.error(f"Failed to trigger reconciliation: {e}")
+            logger.error(f"Failed to trigger reconciliation: {e}", exc_info=True)
             return Response(
-                {'error': 'Failed to trigger reconciliation'},
+                {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-            
+    
+    @extend_schema(
+        responses={200: ReconciliationReportSerializer},
+        description="Cancel a running reconciliation"
+    )
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """
+        Cancel a running or pending reconciliation.
+        Marks it as FAILED and allows new reconciliations to start.
+        """
+        report = self.get_object()
+        
+        if report.status not in [ReconciliationStatus.RUNNING, ReconciliationStatus.PENDING]:
+            return Response(
+                {'error': f'Cannot cancel a report with status {report.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Mark as failed
+        report.status = ReconciliationStatus.FAILED
+        report.completed_at = timezone.now()
+        report.notes = f'{report.notes}\n\n---\n{timezone.now().isoformat()} - {request.user.email}: \nCancelled by admin'
+        report.save()
+        
+        logger.warning(f"Reconciliation {report.id} cancelled by {report.user.email}")
+        serializer = self.get_serializer(report)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'])
+    def cancel_all_stuck(self, request):
+        """
+        Cancel all stuck reconciliations (running for more than 10 minutes).
+        Emergency cleanup endpoint.
+        """
+        minutes = request.data.get('minutes', 10)
+        
+        cutoff = timezone.now() - timedelta(minutes=minutes)
+        stuck = ReconciliationReport.objects.filter(
+            status__in=[ReconciliationStatus.RUNNING, ReconciliationStatus.PENDING],
+            started_at__lt=cutoff
+        )
+        
+        count = stuck.count()
+        
+        if count == 0:
+            return Response({
+                'message': 'No stuck reports found',
+                'cancelled': 0
+            })
+        
+        # Get IDs before updating
+        stuck_ids = list(stuck.values_list('id', flat=True))
+        
+        # Cancel them
+        stuck.update(
+            status=ReconciliationStatus.FAILED,
+            completed_at=timezone.now()
+        )
+        
+        logger.warning(
+            f"Cancelled {count} stuck reports by {request.user.email}: {stuck_ids}"
+        )
+        
+        return Response({
+            'message': f'Cancelled {count} stuck reconciliations',
+            'cancelled': count,
+            'report_ids': stuck_ids
+        }, status=status.HTTP_200_OK)
+
+
     @extend_schema(responses={200: ReconciliationStatusSerializer})
     @action(detail=False, methods=['get'])
     def status(self, request):

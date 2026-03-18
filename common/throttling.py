@@ -19,3 +19,7 @@ class AuthRateThrottle(AnonRateThrottle):
     """Authentication endpoint rate limiting.
     Prevents brute force attacks."""
     scope = 'auth'
+    
+class ReconciliationRateThrottle(UserRateThrottle):
+    """Reconciliation rate limit"""
+    scope = 'reconciliation_trigger'

@@ -3,15 +3,27 @@ version: '3.8'
 services:
   db:
     image: postgres:15
+    container_name: wallet_db
     environment:
       POSTGRES_DB: ${DB_NAME:-wallet_db}
       POSTGRES_USER: ${DB_USER:-wallet_user}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-wallet_user} -d ${DB_NAME:-wallet_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7
+    container_name: wallet_redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   web:
     build: .

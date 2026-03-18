@@ -4,23 +4,22 @@ set -e
 
 echo "Starting entrypoint"
 
+# Wait for DB (basic check)
+# DB_HOST=${DATABASE_HOST:-db}
+# DB_PORT=${DATABASE_PORT:-5432}
+# echo "Waiting for database ${DB_HOST}:${DB_PORT}..."
+#   until nc -z ${DB_HOST} ${DB_PORT}; do
+#   sleep 1
+# done
+
 echo "Running migrations..."
 python manage.py migrate --noinput
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
-echo "Starting Celery worker in background..."
-celery -A config worker -l info concurrency=2 &
-CELERY_PID=$!
-
-# Trap to ensure Celery stops when Gunicorn stops
-# cleanup() {
-#   echo "Shutting down celery worker..."
-#   kill -TERM "$CELERY_PID" 2>/dev/null || true
-#   Wait "$CELERY_PID" 2>/dev/null || true
-# }
-# trap cleanup EXIST TERM INT
+# echo "Starting Celery worker in background..."
+# celery -A config worker -l info &
 
 echo "Starting Gunicorn..."
 PORT=${PORT:-8000}

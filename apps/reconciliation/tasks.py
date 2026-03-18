@@ -1,6 +1,8 @@
 """Celery tasks for reconciliation"""
+from django.core.cache import cache
 import logging
 from decimal import Decimal
+import smtplib
 from celery import shared_task, chord
 from django.db.models import Sum, Q, Count
 from django.utils import timezone
@@ -10,59 +12,98 @@ from django.db.models.functions import Coalesce
 
 from apps.wallets.models import Wallet, Transaction, LedgerEntry
 from apps.wallets.constants import TransactionStatus, EntryType
-from .models import ReconciliationReport,  ReconciliationStatus
+from .models import ReconciliationReport,  ReconciliationStatus, ReconciliationType
 
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from celery.exceptions import SoftTimeLimitExceeded
+from .decorators import idempotent_check
 
 logger = logging.getLogger(__name__)
 
 @shared_task(bind=True, max_retries=3)
+@idempotent_check('double_entry')
 def check_double_entry(self, report_id):
     """Check 1: Every completed transaction has balanced double entries.
     SUM(debits) == SUM(credits) for each transactions."""
+    task_key = f"reconciliation:double_entry:{report_id}"
     try:
+        # Check for cached progress
+        cached_progress = cache.get(task_key)
+        if cached_progress:
+            logger.info(f"[Check 1] Resuming from {cached_progress['checked_count']}")
+            discrepancies = cached_progress.get('discrepancies', [])
+            checked_count = cached_progress.get('checked_count', 0)
+        else:
+            discrepancies = []
+            checked_count = 0
+            
         logger.info(f"[Check 1] Starting double-entry balance check for report {report_id}")
         
         discrepancies = []
-        BATCH_SIZE = settings.RECONCILIATION_BATCH_SIZE
+        all_statuses = list(Transaction.objects.values_list('status', flat=True).distinct())
+        logger.info(f"[Check 1] All statuses in database: {all_statuses}")
         
-        # Get total count
-        total = Transaction.objects.filter(status=TransactionStatus.COMPLETED).count()
-        logger.info(f"[Check 1] Checking {total} completed transactions")
-        
-        # Batch process
-        for offset in range(0, total, BATCH_SIZE):
-            batch = Transaction.objects.filter(
-                status=TransactionStatus.COMPLETED
-            ).annotate(
-                total_debits=Sum(
-                    'ledger_entries__amount',
-                    filter=Q(ledger_entries__entry_type=EntryType.DEBIT)
-                ),
-                total_credits=Sum(
-                    'ledger_entries__amount',
-                    filter=Q(ledger_entries__entry_type=EntryType.CREDIT)
-                ),
-                entry_count=Count('ledger_entries')
-            )[offset:offset + BATCH_SIZE]
-            
-            for txn in batch:
-                debits = txn.total_debits or Decimal('0')
-                credits = txn.total_credits or Decimal('0')
+        completed_statuses = [
+            s for s in all_statuses
+            if s and 'complet' in s.lower()
+        ]
+        if not completed_statuses:
+            logger.warning(f"[Check 1] No 'completed' status found! Using constant.")
+            try:
+                completed_statuses = [TransactionStatus.COMPLETED]
+            except:
+                completed_statuses = ['COMPLETED', 'Completed', 'completed']
                 
-                # Check is: Debits == Credits
-                if debits != credits:
-                    discrepancies.append({
-                        'transaction_id': str(txn.id),
-                        'reference': txn.reference,
-                        'type': txn.transaction_type,
-                        'issue': 'IMBALANCED_ENTRIES',
-                        'debits': str(debits),
-                        'credits': str(credits),
-                        'difference': str(debits - credits),
-                        'severity': 'CRITICAL'
-                    })
+        logger.info(f"[Check 1] Filtering for statuses: {completed_statuses}")
+        
+        # Count first
+        total_count = Transaction.objects.filter(status__in=completed_statuses).count()
+        logger.info(f"[Check 1] Found {total_count} completed transactions to check")
+        
+        if total_count == 0:
+            logger.warning(f"[Check 1] No transactions found! Check status values.")
+            return {
+                'check': 'double_entry',
+                'passed': True,
+                'issues_count': 0,
+                'discrepancies': [],
+                'severity': 'LOW',
+                'metadata': {
+                    'transactions_checked': 0,
+                    'all_statuses_in_db': all_statuses,
+                    'completed_statuses_used': completed_statuses,
+                    'warning': 'No transactions matched the completed status filter'
+                }
+            }
+            
+        # Use iterator to avoid memory over loading
+        transactions = Transaction.objects.filter(
+            status__in=completed_statuses
+        ).annotate(
+            total_debits=Sum('ledger_entries__amount', filter=Q(ledger_entries__entry_type=EntryType.DEBIT)),
+            total_credits=Sum('ledger_entries__amount', filter=Q(ledger_entries__entry_type=EntryType.CREDIT)),
+            entry_count=Count('ledger_entries')
+        ).iterator(chunk_size=1000)
+        
+        checked_count = 0
+            
+        for txn in transactions:
+            debits = txn.total_debits or Decimal('0')
+            credits = txn.total_credits or Decimal('0')
+            
+            # Check is: Debits == Credits
+            if debits != credits:
+                discrepancies.append({
+                    'transaction_id': str(txn.id),
+                    'reference': txn.reference,
+                    'type': txn.transaction_type,
+                    'issue': 'IMBALANCED_ENTRIES',
+                    'debits': str(debits),
+                    'credits': str(credits),
+                    'difference': str(debits - credits),
+                    'severity': 'CRITICAL'
+                })
                 
                 # Check 1b: Should have exactly 2 entries
                 if txn.entry_count != 2:
@@ -75,27 +116,61 @@ def check_double_entry(self, report_id):
                         'expected': 2,
                         'severity': 'HIGH'
                     })
-                    
-        result = {
-            'check': 'double_entry',
-            'passed': len(discrepancies) == 0,
-            'issues_count': len(discrepancies),
-            'discrepancies': discrepancies,
-            'severity': 'CRITICAL' if discrepancies else 'LOW',
-            'metadata' : {'transactions_checked': total}
-        }
-        logger.info(f"[Check 1] Completed. Issues: (len{discrepancies})")
+                checked_count += 1
+                
+                # Progress logging every 10k
+                if checked_count % 10000 == 0:
+                    logger.info(f"[Check 1] Processed {checked_count} transactions...")
+            
+                        
+            result = {
+                'check': 'double_entry',
+                'passed': len(discrepancies) == 0,
+                'issues_count': len(discrepancies),
+                'discrepancies': discrepancies[:100], # Limit to first 100 to avoid huge JSON
+                'severity': 'CRITICAL' if discrepancies else 'LOW',
+                'metadata': {
+                'transactions_checked': checked_count,
+                'all_statuses_in_db': all_statuses,
+                'completed_statuses_used': completed_statuses
+            }
+            }
+        logger.info(f"[Check 1] Completed. Checked {checked_count}, Issues: (len{discrepancies})")
         return result
+    
+    except SoftTimeLimitExceeded:
+        logger.error(f"[Check 1] Task timeout after {self.time_limit}s")
+        return {
+            'check': 'double_entry',
+            'passed': False,
+            'issues_count': 0,
+            'discrepancies': [],
+            'severity': 'CRITICAL',
+            'error': 'Task timed out - dataset too large'
+        }
+    
     except Exception as exc:
-        logger.error(f"[Check 1] Error: {exc}")
-        self.retry(exc, countdown=60)
+        logger.error(f"[Check 1] Error: {exc}", exc_info=True)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
         
 @shared_task(bind=True, max_retries=3)
+@idempotent_check('balance_drift')
 def check_balance_drift(self, report_id):
+    
     """
     Check 2: Cached balances match computed balances.
     """
+    task_key = f"reconciliation:balance_drift:{report_id}"
     try:
+        cached_progress = cache.get(task_key)
+        if cached_progress:
+            logger.info(f"[Check 1] Resuming from {cached_progress['checked_count']}")
+            discrepancies = cached_progress.get('discrepancies', [])
+            checked_count = cached_progress.get('checked_count', 0)
+        else:
+            discrepancies = []
+            checked_count = 0
+            
         logger.info(f"[Check 2] Starting balance drift check for report {report_id}")
         
         discrepancies = []
@@ -169,7 +244,17 @@ def check_balance_drift(self, report_id):
 @shared_task(bind=True, max_retries=3)
 def check_negative_balances(self, report_id):
     """Check 3: No non-system wallet should have negative balance."""
+    task_key = f"reconciliation:negative_balance:{report_id}"
     try:
+        cached_progress = cache.get(task_key)
+        if cached_progress:
+            logger.info(f"[Check 1] Resuming from {cached_progress['checked_count']}")
+            discrepancies = cached_progress.get('discrepancies', [])
+            checked_count = cached_progress.get('checked_count', 0)
+        else:
+            discrepancies = []
+            checked_count = 0
+            
         logger.info(f"[Check 3] Starting negative balance check for report {report_id}")
         
         discrepancies = []
@@ -230,7 +315,17 @@ def check_transaction_state(self, report_id):
     - PENDING transactions older than 5 minutes are flagged
     - FAILED transactions have 0 entries
     """
+    task_key = f"reconciliation:transaction_state:{report_id}"
     try:
+        cached_progress = cache.get(task_key)
+        if cached_progress:
+            logger.info(f"[Check 1] Resuming from {cached_progress['checked_count']}")
+            discrepancies = cached_progress.get('discrepancies', [])
+            checked_count = cached_progress.get('checked_count', 0)
+        else:
+            discrepancies = []
+            checked_count = 0
+            
         logger.info(f"[Check 4] Starting transaction state check for report {report_id}")
         
         discrepancies = []
@@ -314,7 +409,17 @@ def check_global_balance(self, report_id):
     Check 5: System-wide balance check.
     SUM(all debits) == SUM(all credits) across entire system.
     """
+    task_key = f"reconciliation:global_balance:{report_id}"
     try:
+        cached_progress = cache.get(task_key)
+        if cached_progress:
+            logger.info(f"[Check 1] Resuming from {cached_progress['checked_count']}")
+            discrepancies = cached_progress.get('discrepancies', [])
+            checked_count = cached_progress.get('checked_count', 0)
+        else:
+            discrepancies = []
+            checked_count = 0
+            
         logger.info(f"[Check 5] Starting global balance check for report {report_id}")
         
         # Global aggregation with Coalesce to handle NULL
@@ -445,7 +550,7 @@ def aggregate_results(check_results, report_id):
         return None
     
 @shared_task
-def send_reconciliation_alert(report_id):
+def send_reconciliation_alert(self, report_id):
     """Send email alert for reconciliation issues."""
     try:
         report = ReconciliationReport.objects.get(id=report_id)
@@ -490,15 +595,32 @@ Checks Summary:
         )
         logger.info(f"[Alert] Sent email for report {report_id}")
         
+    except smtplib.SMTPException as exc:
+        logger.error(f"[Alert] Email failed: {exc}")
+        # Retry email sending
+        raise self.retry(exc=exc, countdown=300, max_retries=3)  # Retry after 5 min
+        
+    except ReconciliationReport.DoesNotExist:
+        logger.error(f"[Alert] Report {report_id} not found")
+        # Don't retry - report doesn't exist
+        
     except Exception as exc:
-        logger.error(f"[Alert] Failed to send email: {exc}")
+        logger.error(f"[Alert] Unexpected error: {exc}", exc_info=True)
+        # Don't retry unexpected errors
 
 @shared_task
 def run_reconciliation(run_type: str = 'SCHEDULED', report_id=None):
     """Master task that orchestrates the entire reconciliation process.
     Run 5 checks in parallel using Celery chord."""
     
-    logger.info(f"[Master] Starting reconciliation for report {report_id}")
+    # Validate run_type early
+    valid_types = [choice[0] for choice in ReconciliationType.choices]
+    if run_type not in valid_types:
+        error_msg = f"Invalid run_type: '{run_type}'. Must be one of {valid_types}"
+        logger.error(f"[Master] {error_msg}")
+        raise ValueError(error_msg)
+    
+    logger.info(f"[Master] Starting {run_type} reconciliation for report {report_id}")
     
     try:
         # Create report if not provided
@@ -511,14 +633,14 @@ def run_reconciliation(run_type: str = 'SCHEDULED', report_id=None):
             report_id = str(report.id)
             logger.info(f"[Master] Created report {report_id}")
         else:
-            # Update existing report
+            # Update existing report to RUNNING
             report = ReconciliationReport.objects.get(id=report_id)
             report.status = ReconciliationStatus.RUNNING
             report.started_at = timezone.now()
             report.save()
+            logger.info(f"[Master] Updated report {report_id} to RUNNING")
             
         # Define parallel workflow using chord
-        # All checks run in parallel, then aggregate_results is called
         workflow = chord([
             check_double_entry.s(report_id),
             check_balance_drift.s(report_id),
@@ -530,14 +652,20 @@ def run_reconciliation(run_type: str = 'SCHEDULED', report_id=None):
         logger.info(f"[Master] Workflow started for report {report_id}")
         return report_id
     
+    except ReconciliationReport.DoesNotExist:
+        error_msg = f"Report {report_id} not found"
+        logger.error(f"[Master] {error_msg}")
+        raise
+    
     except Exception as exc:
-        logger.error(f"[Master] Error starting reconciliation: {exc}")
+        logger.error(f"[Master] Error starting reconciliation: {exc}", exc_info=True)
         if report_id:
             try:
                 report = ReconciliationReport.objects.get(id=report_id)
                 report.status = ReconciliationStatus.FAILED
                 report.completed_at = timezone.now()
                 report.save()
-            except:
-                pass
+                logger.info(f"[Master] Marked report {report_id} as FAILED")
+            except Exception as e:
+                logger.error(f"[Master] Failed to update report status: {e}")
         raise

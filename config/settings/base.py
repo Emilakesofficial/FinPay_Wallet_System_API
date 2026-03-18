@@ -87,14 +87,22 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': env('DB_NAME', default='wallet_system'),
-        'USER': env('DB_USER', default='postgres'),
-        'PASSWORD': env('DB_PASSWORD', default='postgres'),
-        'HOST': env('DB_HOST', default='localhost'),
+        'NAME': env('DB_NAME', default='wallet_db'),
+        'USER': env('DB_USER', default='wallet_user'),
+        'PASSWORD': env('DB_PASSWORD', default='password'),
+        'HOST': env('DB_HOST', default='db'),
         'PORT': env('DB_PORT', default='5432'),
         'ATOMIC_REQUESTS': True,  # Wrap each view in a transaction
+        'CONN_MAX_AGE': 600, # Reuse Connections for 10 minutes
+        'OPTIONS': {
+            'connect_timeout': 10,
+            'options': '-c statement_timeout=30000' # 30s query timeout
+        }
     }
 }
+# Increase pool size for production
+if not DEBUG:
+    DATABASES['default']['CONN_MAX_AGE'] = 0  # Don't persist connections in Celery
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
@@ -172,6 +180,7 @@ REST_FRAMEWORK = {
         'sustained': '1000/hour',
         'transactions': '1000/hour',
         'auth': '200/hour',
+        'reconciliation_trigger': '10/hour',
     },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',

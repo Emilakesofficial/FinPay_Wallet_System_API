@@ -2,6 +2,12 @@
 import os
 from celery import Celery
 from celery.schedules import crontab
+from django.db import connection
+from celery.signals import task_postrun
+from celery.signals import task_failure, task_success, task_retry
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Set default django settings
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.development')
@@ -46,16 +52,46 @@ app.autodiscover_tasks()
 app.conf.beat_schedule = {
     'daily-reconciliation': {
         'task': 'apps.reconciliation.tasks.run_reconciliation',
-        'schedule': crontab(hour=2, minute=0), # 2AM daily
-        'kwargs': {'run_type': 'SCHEDULED'},
+        'schedule': crontab(hour=2, minute=0),  # 2AM daily
+        'kwargs': {
+            'run_type': 'SCHEDULED',
+            'report_id': None  # Will be created by the task
+        },
         'options': {
-            'expires': 3600, # Task expires after 1 hour
+            'expires': 3600,
         }
     },
 }
 
 #Timezone
 app.conf.timezone = 'UTC'
+
+app.conf.worker_pool_retries = True
+
+@app.task(bind=True)
+def cleanup_after_task(self):
+    """Close DB connections to prevent pool exhaustion"""
+    connection.close()
+    
+@task_postrun.connect
+def close_db_connection(**kwargs):
+    connection.close()
+
+@task_failure.connect
+def task_failure_handler(sender=None, task_id=None, exception=None, **kwargs):
+    """Log task failures."""
+    logger.error(f"Task {sender.name}[{task_id}] failed: {exception}")
+    # TODO: Send to monitoring service (Sentry, Datadog, etc.)
+
+@task_retry.connect
+def task_retry_handler(sender=None, task_id=None, reason=None, **kwargs):
+    """Log task retries."""
+    logger.warning(f"Task {sender.name}[{task_id}] retrying: {reason}")
+
+@task_success.connect
+def task_success_handler(sender=None, result=None, **kwargs):
+    """Log successful tasks."""
+    logger.info(f"Task {sender.name} completed successfully")
 
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
